@@ -160,18 +160,38 @@
       const [settings, setSettings] = useState({
         title: '三高祭\n飴ちゃんチャレンジ',
         titleFontSize: 42,
+        btnFontSize: 36,
+        msgFontSize: 18,
         duration: 3,
-        prob: { 1: 5, 2: 10, 3: 20, 4: 30, 5: 35 }
+        // 「飴の数」をキーにした確率設定 (合計100%)
+        probByCandy: { 5: 0, 4: 0, 3: 10, 2: 30, 1: 60, 0: 0 } 
       });
       const [stats, setStats] = useState({
         total: 0,
-        history: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+        historyByCandy: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0, 0: 0 }
       });
-      const [currentResult, setCurrentResult] = useState(null);
+      const [currentResultCandy, setCurrentResultCandy] = useState(null); // 出た飴の数
       const [toast, setToast] = useState('');
+      
+      // 追加: 背景テーマ状態（初期読み込み時に0〜4のランダムな数字を設定）
+      const [bgTheme, setBgTheme] = useState(() => Math.floor(Math.random() * 5)); 
       
       const audioCtxRef = useRef(null);
       const drawIntervalRef = useRef(null);
+
+      // 確率が0より大きい飴の数を降順に並べ、順位(等級)を自動計算する関数
+      const getRankMap = (probData) => {
+        const available = Object.keys(probData)
+          .map(Number)
+          .filter(c => probData[c] > 0 && c > 0) // 0個はハズレとするため順位から除外
+          .sort((a, b) => b - a);
+        const map = {};
+        available.forEach((c, i) => {
+          map[c] = i + 1; // 1番多い飴の数が1等
+        });
+        return map;
+      };
+      const rankMap = getRankMap(settings.probByCandy);
 
       const initAudio = () => {
         if (!audioCtxRef.current) {
@@ -198,7 +218,7 @@
         osc.stop(ctx.currentTime + 0.1);
       };
 
-      const playResultSound = (rank) => {
+      const playResultSound = (candyCount) => {
         const ctx = audioCtxRef.current;
         if (!ctx) return;
         const now = ctx.currentTime;
@@ -216,58 +236,68 @@
           osc.stop(now + startOffset + dur);
         };
 
-        if (rank === 1) {
+        if (candyCount >= 5) {
           playNote(523.25, 'square', 0, 0.1);
           playNote(659.25, 'square', 0.1, 0.1);
           playNote(783.99, 'square', 0.2, 0.1);
           playNote(1046.50, 'square', 0.3, 0.6);
-        } else if (rank === 2) {
+        } else if (candyCount === 4) {
           playNote(523.25, 'square', 0, 0.1);
           playNote(659.25, 'square', 0.1, 0.1);
           playNote(783.99, 'square', 0.2, 0.4);
-        } else if (rank === 3) {
+        } else if (candyCount >= 3) {
           playNote(523.25, 'triangle', 0, 0.1);
           playNote(659.25, 'triangle', 0.1, 0.4);
-        } else if (rank === 4) {
+        } else if (candyCount >= 2) {
           playNote(659.25, 'triangle', 0, 0.3);
-        } else {
+        } else if (candyCount === 1) {
           playNote(523.25, 'sine', 0, 0.2);
+        } else {
+          // 0個（ハズレ）の時の残念な音
+          playNote(300, 'sawtooth', 0, 0.3);
+          playNote(250, 'sawtooth', 0.3, 0.5);
         }
-      };
-
-      const getCandyCount = (rank) => {
-        const counts = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 1 };
-        return counts[rank] || 1;
       };
 
       const drawLottery = () => {
         const rand = Math.random() * 100;
         let sum = 0;
-        for (let i = 1; i <= 5; i++) {
-          sum += Number(settings.prob[i]);
-          if (rand <= sum) return i;
+        // 飴の数が多い順から判定
+        const candies = [5, 4, 3, 2, 1, 0];
+        for (let i = 0; i < candies.length; i++) {
+          const candy = candies[i];
+          sum += Number(settings.probByCandy[candy]);
+          if (rand <= sum && settings.probByCandy[candy] > 0) return candy;
         }
-        return 5;
+        // フォールバック
+        return Object.keys(settings.probByCandy).map(Number).find(c => settings.probByCandy[c] > 0) || 0;
       };
 
       const handleStartDraw = () => {
         initAudio();
         setScreen('drawing');
         
+        // 追加: 抽選の度に背景をランダムに変更 (連続で同じ背景にならないように制御)
+        setBgTheme(prev => {
+          let next = Math.floor(Math.random() * 5);
+          if (next === prev) next = (next + 1) % 5;
+          return next;
+        });
+
         drawIntervalRef.current = setInterval(playTick, 100);
 
         setTimeout(() => {
           clearInterval(drawIntervalRef.current);
-          const result = drawLottery();
-          setCurrentResult(result);
+          const resultCandy = drawLottery();
+          setCurrentResultCandy(resultCandy);
           
           setStats(prev => ({
-            total: prev.total + getCandyCount(result),
-            history: { ...prev.history, [result]: prev.history[result] + 1 }
+            total: prev.total + resultCandy,
+            historyByCandy: { ...prev.historyByCandy, [resultCandy]: prev.historyByCandy[resultCandy] + 1 }
           }));
 
           setScreen('result');
-          playResultSound(result);
+          playResultSound(resultCandy);
         }, settings.duration * 1000);
       };
 
@@ -276,40 +306,66 @@
         setTimeout(() => setToast(''), 3000);
       };
 
-      const FloatingOrbs = () => (
-        <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
-          <div className="absolute top-10 left-10 w-32 h-32 bg-pink-500 rounded-full mix-blend-screen filter blur-xl opacity-60 animate-float" style={{animationDelay: '0s'}}></div>
-          <div className="absolute top-1/3 right-10 w-40 h-40 bg-yellow-400 rounded-full mix-blend-screen filter blur-xl opacity-60 animate-float" style={{animationDelay: '1.5s'}}></div>
-          <div className="absolute bottom-20 left-1/4 w-36 h-36 bg-cyan-500 rounded-full mix-blend-screen filter blur-xl opacity-60 animate-float" style={{animationDelay: '3s'}}></div>
-        </div>
-      );
+      // --- 三池高校オリジナル背景テーマ定義 (仮のダミー画像URLを使用) ---
+      // ※ここに後ほど、ご自身でアップロードした画像のURLを貼り付けます
+      const THEMES = [
+        { name: '輝跡 (2026テーマ)', bgUrl: 'https://placehold.co/720x1280/2e1065/fde047?text=Theme+1%5CnKiseki' },
+        { name: '大蛇山 (大牟田の炎)', bgUrl: 'https://placehold.co/720x1280/7f1d1d/fef08a?text=Theme+2%5CnDaijayama' },
+        { name: '青春 (三池の青空)', bgUrl: 'https://placehold.co/720x1280/0369a1/f0f9ff?text=Theme+3%5CnYouth' },
+        { name: '三池炭鉱 (黒ダイヤと光)', bgUrl: 'https://placehold.co/720x1280/1c1917/d6d3d1?text=Theme+4%5CnCoal+Mine' },
+        { name: '進取・至誠・自治 (三高の伝統)', bgUrl: 'https://placehold.co/720x1280/064e3b/a7f3d0?text=Theme+5%5CnTradition' }
+      ];
+
+      // --- 画像背景を描画するコンポーネント ---
+      const DynamicBackground = ({ themeIndex }) => {
+        const bgUrl = THEMES[themeIndex].bgUrl;
+        
+        return (
+          <div className="absolute inset-0 z-0 pointer-events-none">
+            {/* 背景画像 */}
+            <div 
+              className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000"
+              style={{ backgroundImage: `url(${bgUrl})` }}
+            ></div>
+            {/* テキストを読みやすくするための暗いオーバーレイ */}
+            <div className="absolute inset-0 bg-black/50"></div>
+          </div>
+        );
+      };
 
       const Home = () => (
         <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-fade-in relative">
-          <FloatingOrbs />
+          <DynamicBackground themeIndex={bgTheme} />
           <div className="absolute top-4 right-4 flex space-x-3 text-white/70 z-20">
             <button onClick={() => setScreen('stats')} className="p-2 hover:bg-white/20 rounded-full transition"><IconBarChart2 size={24} /></button>
             <button onClick={() => setScreen('settings')} className="p-2 hover:bg-white/20 rounded-full transition"><IconSettings size={24} /></button>
           </div>
           
           <div className="z-10 relative mb-16 w-full flex justify-center">
-            <h1 
-              className="font-black leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 via-pink-300 to-yellow-200 animate-gradient-bg drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)] filter py-2"
-              style={{ fontSize: `${settings.titleFontSize}px` }}
-            >
-              {settings.title.split('\n').map((line, index) => (
-                <span key={index} className="block whitespace-nowrap">
-                  {line}
-                </span>
-              ))}
-            </h1>
+            {/* ポスターデザインを意識したガラス張りのテキストコンテナ */}
+            <div className="bg-black/40 backdrop-blur-md px-8 py-6 rounded-3xl border border-white/20 shadow-2xl flex flex-col items-center">
+              <h1 
+                className="font-black leading-tight tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 via-pink-300 to-yellow-200 animate-gradient-bg drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)] filter py-2"
+                style={{ fontSize: `${settings.titleFontSize}px` }}
+              >
+                {settings.title.split('\n').map((line, index) => (
+                  <span key={index} className="block whitespace-nowrap">
+                    {line}
+                  </span>
+                ))}
+              </h1>
+              <div className="mt-4 px-4 py-1 bg-white/10 rounded-full border border-white/30 text-white/90 text-sm font-bold tracking-wider shadow-inner">
+                PTA特別企画 ✖️ 三高祭
+              </div>
+            </div>
           </div>
           
           <div className="relative z-10 mt-8">
             <div className="absolute inset-0 bg-yellow-400 rounded-full blur-2xl opacity-70 animate-pulse"></div>
             <button 
               onClick={handleStartDraw}
-              className="relative bg-gradient-to-b from-yellow-300 via-yellow-400 to-orange-500 text-yellow-900 font-black text-4xl py-6 px-12 rounded-full hover:transform hover:scale-110 active:scale-95 transition-all flex items-center justify-center space-x-4 border-4 border-white btn-glow shadow-[0_10px_25px_rgba(0,0,0,0.5)]"
+              className="relative bg-gradient-to-b from-yellow-300 via-yellow-400 to-orange-500 text-yellow-900 font-black py-6 px-12 rounded-full hover:transform hover:scale-110 active:scale-95 transition-all flex items-center justify-center space-x-4 border-4 border-white btn-glow shadow-[0_10px_25px_rgba(0,0,0,0.5)]"
+              style={{ fontSize: `${settings.btnFontSize}px`, whiteSpace: 'nowrap' }}
             >
               <IconGift size={40} className="animate-bounce text-red-500 drop-shadow-md" />
               <span className="drop-shadow-sm">くじを引く！</span>
@@ -317,7 +373,10 @@
           </div>
           
           <div className="mt-16 z-10 relative">
-            <p className="text-white font-bold text-lg drop-shadow-md bg-black/30 px-6 py-3 rounded-full border border-white/20 backdrop-blur-sm shadow-xl inline-block">
+            <p 
+              className="text-white font-bold drop-shadow-md bg-black/30 px-6 py-3 rounded-full border border-white/20 backdrop-blur-sm shadow-xl inline-block whitespace-nowrap"
+              style={{ fontSize: `${settings.msgFontSize}px` }}
+            >
               ✨ 飲料を買って飴ちゃんをもらおう！🍬 ✨
             </p>
           </div>
@@ -326,8 +385,8 @@
 
       const Drawing = () => (
         <div className="flex flex-col items-center justify-center h-full p-6 text-center relative overflow-hidden">
-          <FloatingOrbs />
-          <div className="absolute inset-0 bg-black/20 z-0"></div>
+          <DynamicBackground themeIndex={bgTheme} />
+          <div className="absolute inset-0 bg-black/30 z-0"></div>
           
           <div className="z-10 relative w-56 h-56 flex items-center justify-center mb-12">
             <div className="absolute inset-0 border-[16px] border-t-pink-500 border-r-yellow-400 border-b-cyan-500 border-l-purple-500 rounded-full animate-spin-fast shadow-[0_0_40px_rgba(255,255,255,0.6)]"></div>
@@ -338,50 +397,61 @@
           <h2 className="z-10 text-5xl sm:text-6xl font-black tracking-widest animate-rainbow-text drop-shadow-[0_4px_4px_rgba(0,0,0,0.9)] py-2">
             抽選中...
           </h2>
+          {/* 現在の背景テーマをガチャのステージ名のように表示 */}
+          <div className="absolute bottom-10 z-10 text-white/90 font-bold bg-black/50 border border-white/20 px-6 py-2 rounded-full backdrop-blur-sm animate-fade-in flex items-center shadow-lg">
+            <span className="text-sm mr-2 opacity-70">STAGE:</span> {THEMES[bgTheme].name}
+          </div>
         </div>
       );
 
       const Result = () => {
-        const candyCount = getCandyCount(currentResult);
-        const colors = {
-          1: 'from-yellow-300 via-yellow-500 to-yellow-600 text-yellow-900 border-yellow-200 shadow-[0_0_50px_rgba(253,224,71,0.8)]',
-          2: 'from-gray-100 via-gray-300 to-gray-500 text-gray-800 border-white shadow-[0_0_40px_rgba(209,213,219,0.8)]',
-          3: 'from-orange-300 via-orange-500 to-orange-700 text-orange-900 border-orange-200 shadow-[0_0_40px_rgba(249,115,22,0.8)]',
-          4: 'from-pink-300 via-pink-500 to-pink-700 text-white border-pink-200 shadow-[0_0_30px_rgba(236,72,153,0.8)]',
-          5: 'from-cyan-300 via-blue-500 to-blue-700 text-white border-blue-200 shadow-[0_0_30px_rgba(59,130,246,0.8)]'
-        };
+        const candyCount = currentResultCandy;
+        const rank = rankMap[candyCount];
         
-        const getResultMessage = (rank) => {
-          switch(rank) {
-            case 1: return "超大当たり！！✨";
-            case 2: return "大当たり！🎉";
-            case 3: return "当たり！🎊";
-            case 4: return "小当たり！🎈";
-            case 5: return "参加賞！🍬";
-            default: return "";
-          }
+        // 飴の数でカードの色を変える
+        const getColorByCandy = (c) => {
+          if (c >= 4) return 'from-yellow-300 via-yellow-500 to-yellow-600 text-yellow-900 border-yellow-200 shadow-[0_0_50px_rgba(253,224,71,0.8)]'; // 金
+          if (c === 3) return 'from-pink-300 via-pink-500 to-pink-700 text-white border-pink-200 shadow-[0_0_30px_rgba(236,72,153,0.8)]'; // ピンク
+          if (c === 2) return 'from-orange-300 via-orange-500 to-orange-700 text-orange-900 border-orange-200 shadow-[0_0_40px_rgba(249,115,22,0.8)]'; // 銅
+          if (c === 1) return 'from-cyan-300 via-blue-500 to-blue-700 text-white border-blue-200 shadow-[0_0_30px_rgba(59,130,246,0.8)]'; // 青
+          return 'from-gray-400 via-gray-600 to-gray-700 text-white border-gray-400 shadow-[0_0_30px_rgba(156,163,175,0.8)]'; // ハズレ用グレー
+        };
+        const colorClass = getColorByCandy(candyCount);
+        
+        const getResultMessage = (c) => {
+          if (c >= 5) return "超大当たり！！✨";
+          if (c === 4) return "大大当たり！🎉";
+          if (c === 3) return "大当たり！🎊";
+          if (c === 2) return "当たり！🎈";
+          if (c === 1) return "参加賞！🍬";
+          return "残念...またね💦";
         };
         
         return (
           <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-pop-in z-10 relative overflow-hidden">
-            <FloatingOrbs />
-            <Confetti />
+            <DynamicBackground themeIndex={bgTheme} />
+            <div className="absolute inset-0 bg-black/20 z-0 pointer-events-none"></div>
+            {candyCount > 0 && <Confetti />}
             <h2 className="text-4xl font-black mb-6 drop-shadow-md text-white z-10 tracking-widest">結果発表！</h2>
             
-            <div className={`relative w-full max-w-sm bg-gradient-to-br ${colors[currentResult]} rounded-3xl p-8 border-4 mb-10 transform hover:scale-105 transition-transform overflow-hidden z-10`}>
+            <div className={`relative w-full max-w-sm bg-gradient-to-br ${colorClass} rounded-3xl p-8 border-4 mb-10 transform hover:scale-105 transition-transform overflow-hidden z-10`}>
               <div className="absolute top-0 left-[-100%] w-[50%] h-[200%] bg-gradient-to-r from-transparent via-white/60 to-transparent rotate-45 animate-[shimmer_2s_infinite]"></div>
               
               <div className="relative z-10">
-                <div className="text-2xl font-black mb-2 opacity-90 drop-shadow-md">{currentResult}等</div>
+                <div className="text-2xl font-black mb-2 opacity-90 drop-shadow-md">
+                  {candyCount > 0 ? `${rank}等` : 'ハズレ'}
+                </div>
                 <div className="text-4xl sm:text-5xl font-black mb-6 drop-shadow-[0_2px_2px_rgba(0,0,0,0.5)] whitespace-nowrap">
-                  {getResultMessage(currentResult)}
+                  {getResultMessage(candyCount)}
                 </div>
                 <div className="bg-black/20 rounded-2xl p-5 flex flex-col items-center border border-white/40 backdrop-blur-md shadow-inner">
                   <span className="text-lg font-bold mb-3 drop-shadow-sm text-white">プレゼント</span>
-                  <div className="flex flex-wrap justify-center gap-2 mb-3">
-                    {[...Array(candyCount)].map((_, i) => (
+                  <div className="flex flex-wrap justify-center gap-2 mb-3 min-h-[60px] items-center">
+                    {candyCount > 0 ? [...Array(candyCount)].map((_, i) => (
                       <span key={i} className="text-5xl filter drop-shadow-[0_5px_5px_rgba(0,0,0,0.4)] animate-bounce" style={{animationDelay: `${i * 0.1}s`}}>🍬</span>
-                    ))}
+                    )) : (
+                      <span className="text-4xl opacity-80 animate-pulse">👻</span>
+                    )}
                   </div>
                   <span className="text-3xl font-black drop-shadow-md text-white">飴ちゃん {candyCount}個</span>
                 </div>
@@ -403,7 +473,7 @@
         const [err, setErr] = useState('');
 
         const handleSave = () => {
-          const total = Object.values(draft.prob).reduce((a, b) => a + Number(b), 0);
+          const total = Object.values(draft.probByCandy).reduce((a, b) => a + Number(b), 0);
           if (total !== 100) {
             setErr(`確率の合計が100%になりません (現在: ${total}%)`);
             return;
@@ -413,6 +483,8 @@
           showToast('設定を保存しました');
           setScreen('home');
         };
+
+        const draftRankMap = getRankMap(draft.probByCandy);
 
         return (
           <div className="flex flex-col h-full bg-white text-gray-800 animate-fade-in overflow-y-auto">
@@ -444,6 +516,32 @@
                   <span className="font-bold text-gray-600 w-12 text-right">{draft.titleFontSize}px</span>
                 </div>
               </div>
+
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">「くじを引く！」ボタン文字サイズ (px)</label>
+                <div className="flex items-center">
+                  <input 
+                    type="range" min="20" max="60"
+                    value={draft.btnFontSize}
+                    onChange={e => setDraft({...draft, btnFontSize: Number(e.target.value)})}
+                    className="flex-1 mr-4 accent-purple-600"
+                  />
+                  <span className="font-bold text-gray-600 w-12 text-right">{draft.btnFontSize}px</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">メッセージ文字サイズ (px)</label>
+                <div className="flex items-center">
+                  <input 
+                    type="range" min="12" max="40"
+                    value={draft.msgFontSize}
+                    onChange={e => setDraft({...draft, msgFontSize: Number(e.target.value)})}
+                    className="flex-1 mr-4 accent-purple-600"
+                  />
+                  <span className="font-bold text-gray-600 w-12 text-right">{draft.msgFontSize}px</span>
+                </div>
+              </div>
               
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">抽選時間 (秒)</label>
@@ -455,89 +553,117 @@
                 />
               </div>
 
-              <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                <h3 className="font-bold text-gray-700 mb-4 flex justify-between">
-                  <span>当選確率設定 (%)</span>
-                  <span className={`text-sm ${Object.values(draft.prob).reduce((a,b)=>a+Number(b),0) === 100 ? 'text-green-600' : 'text-red-500'}`}>
-                    合計: {Object.values(draft.prob).reduce((a,b)=>a+Number(b),0)}%
+              <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 shadow-sm">
+                <h3 className="font-bold text-gray-700 mb-4 flex justify-between items-center border-b pb-2">
+                  <span>飴の数ごとの当選確率</span>
+                  <span className={`text-sm font-black px-2 py-1 rounded ${Object.values(draft.probByCandy).reduce((a,b)=>a+Number(b),0) === 100 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    合計: {Object.values(draft.probByCandy).reduce((a,b)=>a+Number(b),0)}%
                   </span>
                 </h3>
-                {[1, 2, 3, 4, 5].map(rank => (
-                  <div key={rank} className="flex items-center justify-between mb-3 last:mb-0">
-                    <span className="font-medium text-gray-600">{rank}等 (飴{getCandyCount(rank)}個)</span>
-                    <div className="flex items-center">
-                      <input 
-                        type="number" min="0" max="100"
-                        value={draft.prob[rank]}
-                        onChange={e => setDraft({...draft, prob: {...draft.prob, [rank]: Number(e.target.value)}})}
-                        className="w-20 p-2 border border-gray-300 rounded-lg text-right outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                      <span className="ml-2 text-gray-500">%</span>
+                <p className="text-xs text-gray-500 mb-4">※設定した確率が1%以上のものから、自動的に多い順に「1等、2等...」と等級が割り当てられます。</p>
+                <div className="space-y-3">
+                  {[5, 4, 3, 2, 1, 0].map(candy => (
+                    <div key={candy} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-3 rounded-lg border border-gray-200">
+                      <div className="font-bold text-gray-700 mb-2 sm:mb-0">
+                        飴 {candy}個
+                        {draft.probByCandy[candy] > 0 && candy > 0 && (
+                          <span className="ml-2 text-sm font-black text-pink-600 bg-pink-100 px-2 py-0.5 rounded-full">{draftRankMap[candy]}等</span>
+                        )}
+                        {draft.probByCandy[candy] > 0 && candy === 0 && (
+                          <span className="ml-2 text-sm font-black text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">ハズレ</span>
+                        )}
+                      </div>
+                      <div className="flex items-center">
+                        <span className="text-xs text-gray-500 mr-2">確率:</span>
+                        <input 
+                          type="number" min="0" max="100"
+                          value={draft.probByCandy[candy]}
+                          onChange={e => setDraft({...draft, probByCandy: {...draft.probByCandy, [candy]: Number(e.target.value)}})}
+                          className="w-20 p-2 border border-gray-300 rounded-lg text-right outline-none focus:ring-2 focus:ring-purple-500 font-bold"
+                        />
+                        <span className="ml-2 text-gray-500 text-sm w-4">%</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
               
               {err && (
-                <div className="bg-red-100 text-red-700 p-3 rounded-lg flex items-center text-sm">
+                <div className="bg-red-100 text-red-700 p-3 rounded-lg flex items-center text-sm font-bold">
                   <IconAlertCircle size={16} className="mr-2 flex-shrink-0" /> {err}
                 </div>
               )}
 
               <button 
                 onClick={handleSave}
-                className="w-full bg-purple-600 text-white font-bold py-4 rounded-xl shadow-md hover:bg-purple-700 transition flex justify-center items-center"
+                className="w-full bg-purple-600 text-white font-bold py-4 rounded-xl shadow-md hover:bg-purple-700 active:scale-95 transition flex justify-center items-center text-lg"
               >
-                <IconSave size={20} className="mr-2" /> 設定を保存する
+                <IconSave size={24} className="mr-2" /> 設定を保存する
               </button>
             </div>
           </div>
         );
       };
 
-      const StatsScreen = () => (
-        <div className="flex flex-col h-full bg-white text-gray-800 animate-fade-in overflow-y-auto">
-          <div className="bg-pink-600 text-white p-4 flex items-center sticky top-0 shadow-md">
-            <button onClick={() => setScreen('home')} className="p-2 -ml-2"><IconArrowLeft size={24} /></button>
-            <h2 className="text-xl font-bold ml-2">配布集計 (PTA用)</h2>
-          </div>
-          
-          <div className="p-6 space-y-6">
-            <div className="bg-gradient-to-r from-pink-500 to-rose-400 rounded-2xl p-6 text-white text-center shadow-lg">
-              <p className="text-pink-100 font-medium mb-1">これまでに配った飴の数</p>
-              <div className="text-6xl font-extrabold flex items-center justify-center">
-                {stats.total} <span className="text-2xl ml-2 font-medium">個</span>
-              </div>
-            </div>
-
-            <div className="bg-gray-50 rounded-2xl p-5 border border-gray-200">
-              <h3 className="font-bold text-gray-700 mb-4 border-b pb-2">等級別の出た回数</h3>
-              <div className="space-y-4">
-                {[1, 2, 3, 4, 5].map(rank => (
-                  <div key={rank} className="flex items-center">
-                    <div className="w-16 font-bold text-gray-600">{rank}等</div>
-                    <div className="flex-1 bg-gray-200 h-4 rounded-full overflow-hidden mx-3">
-                      <div 
-                        className="h-full bg-pink-500 rounded-full"
-                        style={{ width: `${Math.max(5, (stats.history[rank] / (Object.values(stats.history).reduce((a,b)=>a+b,0)||1)) * 100)}%` }}
-                      ></div>
-                    </div>
-                    <div className="w-12 text-right font-bold text-pink-600">{stats.history[rank]}回</div>
-                  </div>
-                ))}
-              </div>
+      const StatsScreen = () => {
+        const totalDraws = Object.values(stats.historyByCandy).reduce((a,b)=>a+b,0) || 1;
+        
+        return (
+          <div className="flex flex-col h-full bg-white text-gray-800 animate-fade-in overflow-y-auto">
+            <div className="bg-pink-600 text-white p-4 flex items-center sticky top-0 shadow-md z-10">
+              <button onClick={() => setScreen('home')} className="p-2 -ml-2"><IconArrowLeft size={24} /></button>
+              <h2 className="text-xl font-bold ml-2">配布集計 (PTA用)</h2>
             </div>
             
-            <p className="text-xs text-gray-400 text-center mt-8">
-              ※集計データはこのブラウザ(端末)を開いている間のみ保存されます。
-            </p>
+            <div className="p-6 space-y-6">
+              <div className="bg-gradient-to-r from-pink-500 to-rose-400 rounded-2xl p-6 text-white text-center shadow-lg">
+                <p className="text-pink-100 font-medium mb-1">これまでに配った飴の数</p>
+                <div className="text-6xl font-extrabold flex items-center justify-center">
+                  {stats.total} <span className="text-2xl ml-2 font-medium">個</span>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 rounded-2xl p-5 border border-gray-200 shadow-sm">
+                <h3 className="font-bold text-gray-700 mb-4 border-b pb-2">出た回数</h3>
+                <div className="space-y-4">
+                  {[5, 4, 3, 2, 1, 0].map(candy => {
+                    // 設定で確率0%、かつ1回も出ていない場合は表示しない（画面をスッキリさせるため）
+                    if (stats.historyByCandy[candy] === 0 && settings.probByCandy[candy] === 0) return null;
+                    
+                    const rankText = candy > 0 && rankMap[candy] ? `${rankMap[candy]}等` : candy === 0 ? 'ﾊｽﾞﾚ' : '';
+                    const percentage = (stats.historyByCandy[candy] / totalDraws) * 100;
+
+                    return (
+                      <div key={candy} className="flex items-center">
+                        <div className="w-24 font-bold text-gray-600 flex flex-col sm:flex-row sm:items-center">
+                          <span>飴{candy}個</span>
+                          {rankText && <span className="text-xs text-pink-500 sm:ml-1">({rankText})</span>}
+                        </div>
+                        <div className="flex-1 bg-gray-200 h-4 rounded-full overflow-hidden mx-2">
+                          <div 
+                            className="h-full bg-pink-500 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.max(percentage > 0 ? 5 : 0, percentage)}%` }}
+                          ></div>
+                        </div>
+                        <div className="w-10 text-right font-bold text-pink-600">{stats.historyByCandy[candy]}回</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              <p className="text-xs text-gray-400 text-center mt-8">
+                ※集計データはこのブラウザ(端末)を開いている間のみ保存されます。
+              </p>
+            </div>
           </div>
-        </div>
-      );
+        );
+      };
 
       return (
         <div className="min-h-screen bg-gray-900 flex justify-center font-sans overflow-hidden">
-          <div className="w-full max-w-md bg-gradient-to-br from-indigo-700 via-purple-600 to-pink-600 animate-gradient-bg shadow-2xl relative h-screen sm:h-[850px] sm:max-h-screen sm:rounded-3xl sm:my-auto overflow-hidden">
+          {/* 背景色(bg)の指定を削除し、DynamicBackground コンポーネントに任せる */}
+          <div className="w-full max-w-md shadow-2xl relative h-screen sm:h-[850px] sm:max-h-screen sm:rounded-3xl sm:my-auto overflow-hidden transition-colors duration-1000 ease-in-out">
             
             {screen === 'home' && <Home />}
             {screen === 'drawing' && <Drawing />}
@@ -546,7 +672,7 @@
             {screen === 'stats' && <StatsScreen />}
 
             {toast && (
-              <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl z-50 animate-pop-in whitespace-nowrap">
+              <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl z-50 animate-pop-in whitespace-nowrap font-bold">
                 {toast}
               </div>
             )}
